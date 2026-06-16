@@ -152,7 +152,7 @@ function App(){
   const [form,setForm]=useState({
     sys:"",dia:"",pulse:"",
     timeOfDay:"morning",date:new Date().toISOString().slice(0,10),
-    cigarettes:"0",alcohol:"0",stress:"0",
+    cigRegular:"0",cigElectro:"0",alcohol:"0",alcoholType:"пиво",stress:"0",
     meds:false,medsName:"",notes:"",
   });
   const [aiResult,setAiResult]=useState("");
@@ -181,8 +181,11 @@ function App(){
       id:Date.now().toString(),userId:data.activeUser,
       date:form.date,time:new Date().toTimeString().slice(0,5),
       timeOfDay:form.timeOfDay,sys,dia,pulse:pulse||null,
-      cigarettes:parseInt(form.cigarettes)||0,
+      cigRegular:parseInt(form.cigRegular)||0,
+      cigElectro:parseInt(form.cigElectro)||0,
+      cigarettes:(parseInt(form.cigRegular)||0)+(parseInt(form.cigElectro)||0),
       alcohol:parseFloat(form.alcohol)||0,
+      alcoholType:parseFloat(form.alcohol)>0?form.alcoholType:"",
       stress:parseInt(form.stress)||0,
       meds:form.meds,medsName:form.meds?form.medsName.trim():"",
       notes:form.notes,
@@ -279,7 +282,8 @@ function App(){
     const prompt=`Ты — медицинский консультант по давлению. Данные за последние 30 измерений:
 - Среднее: ${avgSys}/${avgDia}, макс/мин систол.: ${maxSys}/${minSys}
 - По времени суток: ${JSON.stringify(byTime)}
-- Сигарет: ${totalCigs}, алкоголь (дозы): ${totalAlc}
+- Курение: обычных ${last30.reduce((s,r)=>s+(r.cigRegular||0),0)} шт., электронок ${last30.reduce((s,r)=>s+(r.cigElectro||0),0)} шт.
+- Алкоголь: всего ${last30.reduce((s,r)=>s+(r.alcohol||0),0).toFixed(1)} доз; типы: ${[...new Set(last30.filter(r=>r.alcohol>0&&r.alcoholType).map(r=>r.alcoholType))].join(", ")||"не указано"}
 - Высокий стресс (≥7): ${highStress} из ${last30.length}
 - Лекарства: ${medsDays} дней${medsNames?", препараты: "+medsNames:""}
 Ответь на русском по пунктам:
@@ -430,9 +434,35 @@ function App(){
           style:{...C.tBtn,background:form.timeOfDay===t.id?"#6366f1":"#f1f5f9",color:form.timeOfDay===t.id?"#fff":"#64748b"}},
           h("span",{style:{fontSize:19}},t.icon),h("span",{style:{fontSize:10}},t.label)))),
         h("div",{style:C.sT2},"Факторы риска"),
-        h("div",{style:C.row},
-          h("div",{style:C.fld},h("label",{style:C.lbl},"🚬 Сигареты"),h("input",{style:C.inp,type:"number",min:"0",value:form.cigarettes,onChange:e=>setForm(sf({cigarettes:e.target.value}))})),
-          h("div",{style:C.fld},h("label",{style:C.lbl},"🍷 Алкоголь (дозы)"),h("input",{style:C.inp,type:"number",min:"0",step:"0.5",value:form.alcohol,onChange:e=>setForm(sf({alcohol:e.target.value}))})),
+        // Cigarettes block
+        h("div",{style:{marginBottom:10}},
+          h("label",{style:{...C.lbl,marginBottom:7}},"🚬 Сигареты"),
+          h("div",{style:{display:"flex",gap:6}},
+            h("div",{style:{flex:1,display:"flex",flexDirection:"column",gap:3}},
+              h("label",{style:{fontSize:10,color:"#94a3b8"}},"🚬 Обычные"),
+              h("input",{style:C.inp,type:"number",min:"0",placeholder:"0",value:form.cigRegular,onChange:e=>setForm(sf({cigRegular:e.target.value}))}),
+            ),
+            h("div",{style:{flex:1,display:"flex",flexDirection:"column",gap:3}},
+              h("label",{style:{fontSize:10,color:"#94a3b8"}},"💨 Электронка"),
+              h("input",{style:C.inp,type:"number",min:"0",placeholder:"0",value:form.cigElectro,onChange:e=>setForm(sf({cigElectro:e.target.value}))}),
+            ),
+          ),
+        ),
+        // Alcohol block
+        h("div",{style:{marginBottom:10}},
+          h("label",{style:C.lbl},"🍷 Алкоголь"),
+          h("div",{style:{display:"flex",gap:6,marginTop:5}},
+            h("input",{style:{...C.inp,width:80,flexShrink:0},type:"number",min:"0",step:"0.5",placeholder:"0",value:form.alcohol,onChange:e=>setForm(sf({alcohol:e.target.value}))}),
+            h("select",{style:{...C.inp,flex:1},value:form.alcoholType,onChange:e=>setForm(sf({alcoholType:e.target.value}))},
+              h("option",{value:"пиво"},"🍺 Пиво"),
+              h("option",{value:"вино"},"🍷 Вино"),
+              h("option",{value:"шампанское"},"🥂 Шампанское"),
+              h("option",{value:"коньяк"},"🥃 Коньяк"),
+              h("option",{value:"водка"},"🥃 Водка"),
+              h("option",{value:"виски"},"🥃 Виски"),
+              h("option",{value:"коктейль"},"🍹 Коктейль"),
+            ),
+          ),
         ),
         h("div",{style:C.fld},
           h("label",{style:C.lbl},"😰 Стресс: "+form.stress+"/10"),
@@ -504,7 +534,9 @@ function App(){
             h("div",{style:C.hMeta},
               h("div",{style:C.hDate},new Date(r.date).toLocaleDateString("ru",{day:"numeric",month:"short"})+" "+(TIME_OF_DAY.find(t=>t.id===r.timeOfDay)?.icon||"")),
               h("div",{style:{fontSize:10,color:"#94a3b8"}},
-                z.label+(r.cigarettes>0?" · 🚬"+r.cigarettes:"")+(r.alcohol>0?" · 🍷"+r.alcohol:"")+(r.meds?" · 💊"+(r.medsName?" "+r.medsName:""):"")+(r.stress>0?" · 😰"+r.stress+"/10":"")
+                z.label+
+                (r.cigRegular>0?" · 🚬"+r.cigRegular:"")+(r.cigElectro>0?" · 💨"+r.cigElectro:"")+
+                (r.alcohol>0?" · 🍷"+r.alcohol+(r.alcoholType?" ("+r.alcoholType+")":""):"")+(r.meds?" · 💊"+(r.medsName?" "+r.medsName:""):"")+(r.stress>0?" · 😰"+r.stress+"/10":"")
               ),
               r.notes&&h("div",{style:C.hNote},r.notes),
             ),
