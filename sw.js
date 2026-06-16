@@ -4,7 +4,7 @@ const ASSETS = [
   "./manifest.json",
   "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/recharts/2.5.0/Recharts.js"
+  "https://unpkg.com/recharts@2.1.9/umd/Recharts.js"
 ];
 
 self.addEventListener("install", e => {
