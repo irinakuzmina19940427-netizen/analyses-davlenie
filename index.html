@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="Давление"/>
+<meta name="theme-color" content="#6366f1"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="https://fakeimg.pl/192x192/6366f1/ffffff?text=❤️&font_size=80"/>
+<title>❤️ Давление — Мониторинг</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.5.0/Recharts.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:'Inter',system-ui,sans-serif;background:#f8fafc;min-height:100vh}
+input,button,textarea,select{font-family:inherit}
+input[type=range]{width:100%;accent-color:#6366f1;margin-top:4px}
+input[type=checkbox]{width:16px;height:16px;accent-color:#6366f1;cursor:pointer}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:#f1f5f9}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:2px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {useState,useEffect,useCallback,useRef,createElement:h} = React;
+const {
+  LineChart,Line,XAxis,YAxis,CartesianGrid,Tooltip,
+  ResponsiveContainer,ReferenceLine,Legend,BarChart,Bar
+} = Recharts;
+
+const STORAGE_KEY = "bp_tracker_v3";
+const API_KEY_STORAGE = "bp_tracker_apikey";
+const TIME_OF_DAY = [
+  {id:"morning",label:"Утро",  icon:"🌅"},
+  {id:"day",    label:"День",  icon:"☀️"},
+  {id:"evening",label:"Вечер",icon:"🌆"},
+  {id:"night",  label:"Ночь", icon:"🌙"},
+];
+const BP_ZONES = [
+  {label:"Норма",        color:"#10b981"},
+  {label:"Повышенное",   color:"#f59e0b"},
+  {label:"Гипертония I", color:"#f97316"},
+  {label:"Гипертония II",color:"#ef4444"},
+  {label:"Криз",         color:"#7c3aed"},
+];
+function getBpZone(s,d){
+  if(s>=180||d>=120)return BP_ZONES[4];
+  if(s>=140||d>=90) return BP_ZONES[3];
+  if(s>=130||d>=80) return BP_ZONES[2];
+  if(s>=120)        return BP_ZONES[1];
+  return BP_ZONES[0];
+}
+function getBpColor(s,d){return getBpZone(s,d).color;}
+
+const initState={users:[{id:"u1",name:"Пользователь 1",color:"#6366f1"}],activeUser:"u1",records:[]};
+function loadData(){try{const r=localStorage.getItem(STORAGE_KEY);if(r)return JSON.parse(r);}catch{}return initState;}
+function saveData(d){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{}}
+
+const TABS=["Добавить","Графики","История","AI-анализ","Данные","⚙️"];
+
+function App(){
+  const [data,setData]=useState(loadData);
+  const [tab,setTab]=useState(0);
+  const [form,setForm]=useState({
+    sys:"",dia:"",pulse:"",
+    timeOfDay:"morning",date:new Date().toISOString().slice(0,10),
+    cigarettes:"0",alcohol:"0",stress:"0",
+    meds:false,medsName:"",notes:"",
+  });
+  const [aiResult,setAiResult]=useState("");
+  const [aiLoading,setAiLoading]=useState(false);
+  const [chartRange,setChartRange]=useState("week");
+  const [showUserModal,setShowUserModal]=useState(false);
+  const [newUserName,setNewUserName]=useState("");
+  const [saved,setSaved]=useState(false);
+  const [importMsg,setImportMsg]=useState("");
+  const [apiKey,setApiKey]=useState(()=>localStorage.getItem(API_KEY_STORAGE)||"");
+  const [apiKeySaved,setApiKeySaved]=useState(false);
+  const importRef=useRef();
+
+  useEffect(()=>saveData(data),[data]);
+
+  const userRecords=data.records
+    .filter(r=>r.userId===data.activeUser)
+    .sort((a,b)=>new Date(a.date+"T"+(a.time||"00:00"))-new Date(b.date+"T"+(b.time||"00:00")));
+
+  function addRecord(){
+    const sys=parseInt(form.sys),dia=parseInt(form.dia),pulse=parseInt(form.pulse);
+    if(!sys||!dia||sys<60||sys>260||dia<40||dia>160)return;
+    const rec={
+      id:Date.now().toString(),userId:data.activeUser,
+      date:form.date,time:new Date().toTimeString().slice(0,5),
+      timeOfDay:form.timeOfDay,sys,dia,pulse:pulse||null,
+      cigarettes:parseInt(form.cigarettes)||0,
+      alcohol:parseFloat(form.alcohol)||0,
+      stress:parseInt(form.stress)||0,
+      meds:form.meds,medsName:form.meds?form.medsName.trim():"",
+      notes:form.notes,
+    };
+    setData(d=>({...d,records:[...d.records,rec]}));
+    setSaved(true);setTimeout(()=>setSaved(false),2000);
+    setForm(f=>({...f,sys:"",dia:"",pulse:"",notes:"",cigarettes:"0",alcohol:"0",medsName:""}));
+  }
+
+  function deleteRecord(id){setData(d=>({...d,records:d.records.filter(r=>r.id!==id)}));}
+
+  function addUser(){
+    if(!newUserName.trim())return;
+    const colors=["#6366f1","#ec4899","#10b981","#f59e0b","#06b6d4","#8b5cf6"];
+    const id="u"+Date.now();
+    setData(d=>({...d,
+      users:[...d.users,{id,name:newUserName.trim(),color:colors[d.users.length%colors.length]}],
+      activeUser:id,
+    }));
+    setNewUserName("");setShowUserModal(false);
+  }
+
+  function exportJSON(){
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;
+    a.download="давление_"+new Date().toISOString().slice(0,10)+".json";
+    a.click();URL.revokeObjectURL(url);
+  }
+
+  function exportCSV(){
+    const rows=[["Дата","Время","Пользователь","Сист.","Диаст.","Пульс","Время суток","Сигареты","Алкоголь","Стресс","Лекарства","Препарат","Заметки"]];
+    data.records.forEach(r=>{
+      const user=data.users.find(u=>u.id===r.userId)?.name||r.userId;
+      const tod=TIME_OF_DAY.find(t=>t.id===r.timeOfDay)?.label||r.timeOfDay;
+      rows.push([r.date,r.time||"",user,r.sys,r.dia,r.pulse||"",tod,r.cigarettes,r.alcohol,r.stress,r.meds?"Да":"Нет",r.medsName||"",r.notes||""]);
+    });
+    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;
+    a.download="давление_"+new Date().toISOString().slice(0,10)+".csv";
+    a.click();URL.revokeObjectURL(url);
+  }
+
+  function importJSON(e){
+    const file=e.target.files?.[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const p=JSON.parse(ev.target.result);
+        if(!p.users||!p.records)throw new Error();
+        setData(p);setImportMsg("✓ Данные успешно загружены!");
+      }catch{setImportMsg("✗ Ошибка: неверный файл.");}
+      setTimeout(()=>setImportMsg(""),4000);
+    };
+    reader.readAsText(file);e.target.value="";
+  }
+
+  function saveApiKey(key){
+    localStorage.setItem(API_KEY_STORAGE,key.trim());
+    setApiKey(key.trim());
+    setApiKeySaved(true);
+    setTimeout(()=>setApiKeySaved(false),2000);
+  }
+
+  const getChartData=useCallback(()=>{
+    const now=new Date();let from=new Date(now);
+    if(chartRange==="week")from.setDate(now.getDate()-7);
+    else if(chartRange==="month")from.setMonth(now.getMonth()-1);
+    else if(chartRange==="3months")from.setMonth(now.getMonth()-3);
+    else from.setFullYear(now.getFullYear()-1);
+    return userRecords.filter(r=>new Date(r.date)>=from).map(r=>({
+      ...r,
+      label:chartRange==="week"
+        ?new Date(r.date).toLocaleDateString("ru",{weekday:"short",day:"numeric"})
+        :new Date(r.date).toLocaleDateString("ru",{day:"numeric",month:"short"}),
+      color:getBpColor(r.sys,r.dia),
+    }));
+  },[userRecords,chartRange]);
+
+  const chartData=getChartData();
+
+  async function runAI(){
+    if(!apiKey){setAiResult("⚙️ Сначала введите API ключ на вкладке настроек (⚙️).");return;}
+    if(userRecords.length<2){setAiResult("Добавьте хотя бы 2–3 измерения.");return;}
+    setAiLoading(true);setAiResult("");
+    const last30=userRecords.slice(-30);
+    const avgSys=Math.round(last30.reduce((s,r)=>s+r.sys,0)/last30.length);
+    const avgDia=Math.round(last30.reduce((s,r)=>s+r.dia,0)/last30.length);
+    const maxSys=Math.max(...last30.map(r=>r.sys));
+    const minSys=Math.min(...last30.map(r=>r.sys));
+    const totalCigs=last30.reduce((s,r)=>s+r.cigarettes,0);
+    const totalAlc=last30.reduce((s,r)=>s+r.alcohol,0).toFixed(1);
+    const highStress=last30.filter(r=>r.stress>=7).length;
+    const medsDays=last30.filter(r=>r.meds).length;
+    const medsNames=[...new Set(last30.filter(r=>r.medsName).map(r=>r.medsName))].join(", ");
+    const byTime={};
+    TIME_OF_DAY.forEach(t=>{
+      const recs=last30.filter(r=>r.timeOfDay===t.id);
+      if(recs.length)byTime[t.label]=Math.round(recs.reduce((s,r)=>s+r.sys,0)/recs.length);
+    });
+    const prompt=`Ты — медицинский консультант по давлению. Данные за последние 30 измерений:
+- Среднее: ${avgSys}/${avgDia}, макс/мин систол.: ${maxSys}/${minSys}
+- По времени суток: ${JSON.stringify(byTime)}
+- Сигарет: ${totalCigs}, алкоголь (дозы): ${totalAlc}
+- Высокий стресс (≥7): ${highStress} из ${last30.length}
+- Лекарства: ${medsDays} дней${medsNames?", препараты: "+medsNames:""}
+
+Ответь на русском строго по пунктам:
+1. **Общая оценка**
+2. **Что беспокоит**
+3. **Влияние факторов**
+4. **Рекомендации** (5-7 советов)
+5. **Когда к врачу**
+
+Не ставь диагноз, будь конкретным.`;
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]}),
+      });
+      const json=await res.json();
+      setAiResult(json.content?.map(b=>b.text||"").join("")||"Ошибка.");
+    }catch{setAiResult("Не удалось получить анализ.");}
+    setAiLoading(false);
+  }
+
+  const latestRec=userRecords[userRecords.length-1];
+  const zone=latestRec?getBpZone(latestRec.sys,latestRec.dia):null;
+
+  function CustomDot({cx,cy,payload}){
+    return h("circle",{cx,cy,r:5,fill:payload.color,stroke:"#fff",strokeWidth:1.5});
+  }
+
+  function fmtAI(text){
+    return text.split("\n").map((line,i)=>{
+      const html=line.replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>");
+      return h("p",{key:i,dangerouslySetInnerHTML:{__html:html},style:{margin:"4px 0"}});
+    });
+  }
+
+  // ── Styles ─────────────────────────────────────────────────
+  const css={
+    root:{fontFamily:"'Inter',system-ui,sans-serif",background:"#f8fafc",minHeight:"100vh",maxWidth:480,margin:"0 auto",paddingBottom:40},
+    header:{background:"linear-gradient(135deg,#6366f1,#4f46e5)",padding:"20px 16px 16px",color:"#fff"},
+    headerTop:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14},
+    appTitle:{fontSize:22,fontWeight:800,letterSpacing:"-0.5px"},
+    appSub:{fontSize:12,opacity:0.8,marginTop:2},
+    userArea:{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end"},
+    userChip:{border:"none",borderRadius:20,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"#fff",transition:"all .2s"},
+    addUserBtn:{background:"rgba(255,255,255,0.2)",border:"1.5px dashed rgba(255,255,255,0.5)",borderRadius:20,padding:"4px 10px",color:"#fff",cursor:"pointer",fontSize:16},
+    latestCard:{background:"rgba(255,255,255,0.12)",borderRadius:12,padding:"10px 14px",border:"1.5px solid",backdropFilter:"blur(8px)"},
+    latestMain:{display:"flex",alignItems:"baseline",gap:8},
+    latestBp:{fontSize:32,fontWeight:800,letterSpacing:"-1px"},
+    latestUnit:{fontSize:13,opacity:0.8},
+    latestPulse:{marginLeft:"auto",fontSize:14,opacity:0.9},
+    latestMeta:{marginTop:4,fontSize:13,opacity:0.9,display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"},
+    dot:{opacity:0.5},
+    tabs:{display:"flex",background:"#fff",borderBottom:"1px solid #e2e8f0",overflowX:"auto"},
+    tab:{flex:1,border:"none",background:"transparent",padding:"12px 4px",fontSize:11,cursor:"pointer",color:"#64748b",borderBottom:"2px solid transparent",whiteSpace:"nowrap",minWidth:0},
+    tabActive:{color:"#6366f1",borderBottomColor:"#6366f1",fontWeight:700},
+    content:{padding:"12px"},
+    card:{background:"#fff",borderRadius:16,padding:16,marginBottom:12,boxShadow:"0 1px 3px rgba(0,0,0,0.06)"},
+    sTitle:{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:14},
+    sTitle2:{fontSize:12,fontWeight:700,color:"#94a3b8",marginTop:16,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.5px"},
+    row:{display:"flex",gap:8},
+    field:{flex:1,display:"flex",flexDirection:"column",marginBottom:12},
+    label:{fontSize:12,color:"#64748b",marginBottom:6,fontWeight:500},
+    input:{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 12px",fontSize:15,outline:"none",color:"#1e293b",background:"#f8fafc",width:"100%"},
+    textarea:{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 12px",fontSize:14,outline:"none",color:"#1e293b",background:"#f8fafc",minHeight:64,resize:"vertical",width:"100%"},
+    timeRow:{display:"flex",gap:6,marginBottom:12},
+    timeBtn:{flex:1,border:"none",borderRadius:10,padding:"8px 4px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4,transition:"all .2s"},
+    medsBlock:{background:"#f8fafc",borderRadius:12,padding:12,marginBottom:12,border:"1.5px solid #e2e8f0"},
+    checkRow:{display:"flex",alignItems:"center",cursor:"pointer",fontSize:14,color:"#475569"},
+    saveBtn:{width:"100%",background:"#6366f1",color:"#fff",border:"none",borderRadius:12,padding:14,fontSize:15,fontWeight:700,cursor:"pointer"},
+    savedMsg:{textAlign:"center",color:"#10b981",fontSize:13,marginTop:8,fontWeight:600},
+    zoneBar:{border:"1.5px solid",borderRadius:8,padding:"6px 12px",fontSize:13,fontWeight:600,marginBottom:12,textAlign:"center"},
+    rangeRow:{display:"flex",gap:6,marginBottom:12},
+    rangeBtn:{flex:1,border:"none",borderRadius:10,padding:8,fontSize:13,cursor:"pointer",fontWeight:600},
+    empty:{color:"#94a3b8",textAlign:"center",padding:"32px 16px",fontSize:14,lineHeight:1.6},
+    tooltip:{background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"8px 12px",fontSize:13,boxShadow:"0 4px 12px rgba(0,0,0,.1)"},
+    timeStats:{display:"flex",gap:8},
+    timeStat:{flex:1,textAlign:"center",background:"#f8fafc",borderRadius:10,padding:"12px 6px"},
+    histRow:{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 0",borderBottom:"1px solid #f1f5f9"},
+    bpBadge:{borderRadius:10,padding:"8px 10px",textAlign:"center",minWidth:70,display:"flex",flexDirection:"column",gap:2},
+    histMeta:{flex:1},
+    histDate:{fontSize:13,fontWeight:600,color:"#1e293b"},
+    histNote:{fontSize:11,color:"#94a3b8",marginTop:2,fontStyle:"italic"},
+    deleteBtn:{background:"none",border:"none",color:"#cbd5e1",cursor:"pointer",fontSize:16,padding:"0 4px"},
+    aiDesc:{fontSize:13,color:"#64748b",lineHeight:1.6,marginBottom:14},
+    aiStats:{display:"flex",gap:12,marginBottom:16},
+    aiStat:{flex:1,background:"#f8fafc",borderRadius:10,padding:12,textAlign:"center"},
+    aiStatNum:{display:"block",fontSize:22,fontWeight:800,color:"#6366f1"},
+    aiStatLabel:{display:"block",fontSize:11,color:"#94a3b8",marginTop:2},
+    aiBtn:{width:"100%",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",border:"none",borderRadius:12,padding:14,fontSize:15,fontWeight:700,cursor:"pointer",marginBottom:16},
+    aiResult:{background:"#f8fafc",borderRadius:12,padding:14,fontSize:13,color:"#334155",lineHeight:1.7,borderLeft:"3px solid #6366f1"},
+    disclaimer:{marginTop:14,fontSize:11,color:"#94a3b8",textAlign:"center",lineHeight:1.5},
+    exportInfo:{display:"flex",gap:8,marginBottom:16},
+    exportStat:{flex:1,background:"#f8fafc",borderRadius:10,padding:12,textAlign:"center"},
+    exportNum:{display:"block",fontSize:18,fontWeight:800,color:"#6366f1"},
+    exportLabel:{display:"block",fontSize:11,color:"#94a3b8",marginTop:2},
+    exportBtns:{display:"flex",flexDirection:"column",gap:10},
+    exportBtn:{display:"flex",flexDirection:"column",alignItems:"center",gap:4,background:"#eff6ff",border:"1.5px solid #bfdbfe",borderRadius:12,padding:16,cursor:"pointer",color:"#1e40af"},
+    exportBtnGreen:{display:"flex",flexDirection:"column",alignItems:"center",gap:4,background:"#f0fdf4",border:"1.5px solid #86efac",borderRadius:12,padding:16,cursor:"pointer",color:"#166534"},
+    importBtn:{width:"100%",background:"#f8fafc",border:"2px dashed #cbd5e1",borderRadius:12,padding:16,fontSize:14,color:"#64748b",cursor:"pointer",fontWeight:600},
+    overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16},
+    modal:{background:"#fff",borderRadius:16,padding:20,width:"100%",maxWidth:340},
+    modalBtns:{display:"flex",gap:8,marginTop:14},
+    cancelBtn:{flex:1,background:"#f1f5f9",border:"none",borderRadius:10,padding:12,fontSize:14,cursor:"pointer",color:"#64748b",fontWeight:600},
+  };
+
+  // helpers
+  const sf=v=>f=>({...f,...v}); // setForm helper
+
+  return h("div",{style:css.root},
+
+    // ── Header ──
+    h("div",{style:css.header},
+      h("div",{style:css.headerTop},
+        h("div",null,
+          h("div",{style:css.appTitle},"❤️ Давление"),
+          h("div",{style:css.appSub},"Мониторинг здоровья"),
+        ),
+        h("div",{style:css.userArea},
+          ...data.users.map(u=>h("button",{key:u.id,
+            onClick:()=>setData(d=>({...d,activeUser:u.id})),
+            style:{...css.userChip,background:data.activeUser===u.id?u.color:"rgba(255,255,255,0.18)",fontWeight:data.activeUser===u.id?700:400}},
+            u.name.slice(0,9)
+          )),
+          h("button",{onClick:()=>setShowUserModal(true),style:css.addUserBtn},"+"),
+        ),
+      ),
+      latestRec&&h("div",{style:{...css.latestCard,borderColor:zone.color}},
+        h("div",{style:css.latestMain},
+          h("span",{style:{...css.latestBp,color:zone.color}},latestRec.sys+"/"+latestRec.dia),
+          h("span",{style:css.latestUnit},"мм рт.ст."),
+          latestRec.pulse&&h("span",{style:css.latestPulse},"💓 "+latestRec.pulse),
+        ),
+        h("div",{style:css.latestMeta},
+          h("span",{style:{color:zone.color,fontWeight:600}},zone.label),
+          h("span",{style:css.dot},"·"),
+          h("span",null,new Date(latestRec.date).toLocaleDateString("ru",{day:"numeric",month:"short"})),
+          h("span",{style:css.dot},"·"),
+          h("span",null,(TIME_OF_DAY.find(t=>t.id===latestRec.timeOfDay)?.icon||"")+" "+(TIME_OF_DAY.find(t=>t.id===latestRec.timeOfDay)?.label||"")),
+          latestRec.meds&&h("span",null,"· 💊"+(latestRec.medsName?" "+latestRec.medsName:"")),
+        ),
+      ),
+    ),
+
+    // ── Tabs ──
+    h("div",{style:css.tabs},
+      ...TABS.map((t,i)=>h("button",{key:t,onClick:()=>setTab(i),
+        style:{...css.tab,...(tab===i?css.tabActive:{})}},t))
+    ),
+
+    h("div",{style:css.content},
+
+      // ── TAB 0: Добавить ──
+      tab===0&&h("div",{style:css.card},
+        h("div",{style:css.sTitle},"Новое измерение"),
+        h("div",{style:css.row},
+          h("div",{style:css.field},h("label",{style:css.label},"Систолическое"),h("input",{style:css.input,type:"number",placeholder:"120",value:form.sys,onChange:e=>setForm(sf({sys:e.target.value}))})),
+          h("div",{style:css.field},h("label",{style:css.label},"Диастолическое"),h("input",{style:css.input,type:"number",placeholder:"80",value:form.dia,onChange:e=>setForm(sf({dia:e.target.value}))})),
+          h("div",{style:css.field},h("label",{style:css.label},"Пульс"),h("input",{style:css.input,type:"number",placeholder:"72",value:form.pulse,onChange:e=>setForm(sf({pulse:e.target.value}))})),
+        ),
+        form.sys&&form.dia&&parseInt(form.sys)>0&&h("div",{style:{...css.zoneBar,background:getBpColor(+form.sys,+form.dia)+"22",borderColor:getBpColor(+form.sys,+form.dia),color:getBpColor(+form.sys,+form.dia)}},getBpZone(+form.sys,+form.dia).label),
+        h("div",{style:css.field},
+          h("label",{style:css.label},"Дата"),
+          h("input",{style:css.input,type:"date",value:form.date,onChange:e=>setForm(sf({date:e.target.value}))}),
+        ),
+        h("label",{style:css.label},"Время суток"),
+        h("div",{style:css.timeRow},
+          ...TIME_OF_DAY.map(t=>h("button",{key:t.id,onClick:()=>setForm(sf({timeOfDay:t.id})),
+            style:{...css.timeBtn,background:form.timeOfDay===t.id?"#6366f1":"#f1f5f9",color:form.timeOfDay===t.id?"#fff":"#64748b"}},
+            h("span",{style:{fontSize:20}},t.icon),h("span",{style:{fontSize:11}},t.label)
+          ))
+        ),
+        h("div",{style:css.sTitle2},"Факторы риска"),
+        h("div",{style:css.row},
+          h("div",{style:css.field},h("label",{style:css.label},"🚬 Сигареты"),h("input",{style:css.input,type:"number",min:"0",value:form.cigarettes,onChange:e=>setForm(sf({cigarettes:e.target.value}))})),
+          h("div",{style:css.field},h("label",{style:css.label},"🍷 Алкоголь (дозы)"),h("input",{style:css.input,type:"number",min:"0",step:"0.5",value:form.alcohol,onChange:e=>setForm(sf({alcohol:e.target.value}))})),
+        ),
+        h("div",{style:css.field},
+          h("label",{style:css.label},"😰 Стресс: "+form.stress+"/10"),
+          h("input",{type:"range",min:"0",max:"10",value:form.stress,onChange:e=>setForm(sf({stress:e.target.value}))}),
+          h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:10,color:"#94a3b8",marginTop:2}},
+            h("span",null,"Спокойно"),h("span",null,"Умеренно"),h("span",null,"Стресс"),
+          ),
+        ),
+        h("div",{style:css.medsBlock},
+          h("label",{style:css.checkRow},
+            h("input",{type:"checkbox",checked:form.meds,onChange:e=>setForm(f=>({...f,meds:e.target.checked,medsName:e.target.checked?f.medsName:""}))}),
+            h("span",{style:{marginLeft:8,fontWeight:600}},"💊 Принял лекарство"),
+          ),
+          form.meds&&h("input",{style:{...css.input,marginTop:8,fontSize:13},placeholder:"Название (необязательно, напр.: Лозартан)",value:form.medsName,onChange:e=>setForm(sf({medsName:e.target.value}))}),
+        ),
+        h("div",{style:css.field},
+          h("label",{style:css.label},"📝 Заметки"),
+          h("textarea",{style:css.textarea,placeholder:"Самочувствие, симптомы...",value:form.notes,onChange:e=>setForm(sf({notes:e.target.value}))}),
+        ),
+        h("button",{onClick:addRecord,style:css.saveBtn},saved?"✓ Сохранено!":"Сохранить измерение"),
+        saved&&h("div",{style:css.savedMsg},"Запись добавлена"),
+      ),
+
+      // ── TAB 1: Графики ──
+      tab===1&&h("div",null,
+        h("div",{style:css.rangeRow},
+          ...[["week","7 дней"],["month","Месяц"],["3months","3 мес."],["year","Год"]].map(([v,l])=>
+            h("button",{key:v,onClick:()=>setChartRange(v),style:{...css.rangeBtn,background:chartRange===v?"#6366f1":"#f1f5f9",color:chartRange===v?"#fff":"#64748b"}},l)
+          )
+        ),
+        chartData.length<2
+          ?h("div",{style:css.empty},"Нет данных за период. Добавьте хотя бы 2 измерения.")
+          :h("div",null,
+            h("div",{style:css.card},
+              h("div",{style:css.sTitle},"Давление (мм рт.ст.)"),
+              h(ResponsiveContainer,{width:"100%",height:220},
+                h(LineChart,{data:chartData,margin:{top:5,right:10,left:-20,bottom:5}},
+                  h(CartesianGrid,{strokeDasharray:"3 3",stroke:"#e2e8f0"}),
+                  h(XAxis,{dataKey:"label",tick:{fontSize:11}}),
+                  h(YAxis,{domain:[50,200],tick:{fontSize:11}}),
+                  h(Tooltip,{content:({active,payload})=>{
+                    if(!active||!payload?.length)return null;
+                    const r=payload[0]?.payload;
+                    return h("div",{style:css.tooltip},
+                      h("div",{style:{fontWeight:700,color:r.color}},r.sys+"/"+r.dia),
+                      h("div",{style:{fontSize:12}},r.label+" · "+(TIME_OF_DAY.find(t=>t.id===r.timeOfDay)?.icon||"")),
+                      r.cigarettes>0&&h("div",{style:{fontSize:11}},"🚬 "+r.cigarettes),
+                      r.alcohol>0&&h("div",{style:{fontSize:11}},"🍷 "+r.alcohol),
+                      r.meds&&h("div",{style:{fontSize:11}},"💊"+(r.medsName?" "+r.medsName:"")),
+                    );
+                  }}),
+                  h(ReferenceLine,{y:120,stroke:"#10b981",strokeDasharray:"4 4",label:{value:"норма",fontSize:10,fill:"#10b981"}}),
+                  h(ReferenceLine,{y:140,stroke:"#ef4444",strokeDasharray:"4 4",label:{value:"↑ гипертония",fontSize:10,fill:"#ef4444"}}),
+                  h(Line,{type:"monotone",dataKey:"sys",name:"Систолическое",stroke:"#6366f1",strokeWidth:2,dot:h(CustomDot,{})}),
+                  h(Line,{type:"monotone",dataKey:"dia",name:"Диастолическое",stroke:"#818cf8",strokeWidth:2,strokeDasharray:"5 3",dot:false}),
+                  h(Legend,{wrapperStyle:{fontSize:12}}),
+                )
+              ),
+            ),
+            h("div",{style:css.card},
+              h("div",{style:css.sTitle},"Пульс (уд/мин)"),
+              h(ResponsiveContainer,{width:"100%",height:160},
+                h(LineChart,{data:chartData.filter(r=>r.pulse),margin:{top:5,right:10,left:-20,bottom:5}},
+                  h(CartesianGrid,{strokeDasharray:"3 3",stroke:"#e2e8f0"}),
+                  h(XAxis,{dataKey:"label",tick:{fontSize:11}}),h(YAxis,{tick:{fontSize:11}}),
+                  h(Tooltip,null),
+                  h(Line,{type:"monotone",dataKey:"pulse",name:"Пульс",stroke:"#ec4899",strokeWidth:2,dot:false}),
+                )
+              ),
+            ),
+            h("div",{style:css.card},
+              h("div",{style:css.sTitle},"Факторы риска"),
+              h(ResponsiveContainer,{width:"100%",height:160},
+                h(BarChart,{data:chartData,margin:{top:5,right:10,left:-20,bottom:5}},
+                  h(CartesianGrid,{strokeDasharray:"3 3",stroke:"#e2e8f0"}),
+                  h(XAxis,{dataKey:"label",tick:{fontSize:11}}),h(YAxis,{tick:{fontSize:11}}),
+                  h(Tooltip,null),
+                  h(Bar,{dataKey:"cigarettes",name:"🚬 Сигареты",fill:"#94a3b8",radius:[3,3,0,0]}),
+                  h(Bar,{dataKey:"alcohol",name:"🍷 Алкоголь",fill:"#c084fc",radius:[3,3,0,0]}),
+                  h(Legend,{wrapperStyle:{fontSize:11}}),
+                )
+              ),
+            ),
+            h("div",{style:css.card},
+              h("div",{style:css.sTitle},"Среднее по времени суток"),
+              h("div",{style:css.timeStats},
+                ...TIME_OF_DAY.map(t=>{
+                  const recs=chartData.filter(r=>r.timeOfDay===t.id);
+                  if(!recs.length)return null;
+                  const avg=Math.round(recs.reduce((s,r)=>s+r.sys,0)/recs.length);
+                  const avgD=Math.round(recs.reduce((s,r)=>s+r.dia,0)/recs.length);
+                  return h("div",{key:t.id,style:css.timeStat},
+                    h("div",{style:{fontSize:24}},t.icon),
+                    h("div",{style:{fontSize:12,color:"#64748b"}},t.label),
+                    h("div",{style:{fontWeight:700,color:getBpColor(avg,avgD)}},avg+"/"+avgD),
+                  );
+                })
+              ),
+            ),
+          ),
+      ),
+
+      // ── TAB 2: История ──
+      tab===2&&h("div",{style:css.card},
+        h("div",{style:css.sTitle},"История ("+userRecords.length+" записей)"),
+        userRecords.length===0&&h("div",{style:css.empty},"Нет записей. Добавьте первое измерение!"),
+        ...[...userRecords].reverse().map(r=>{
+          const z=getBpZone(r.sys,r.dia);
+          return h("div",{key:r.id,style:css.histRow},
+            h("div",{style:{...css.bpBadge,background:z.color+"18",color:z.color}},
+              h("span",{style:{fontSize:17,fontWeight:800}},r.sys+"/"+r.dia),
+              r.pulse&&h("span",{style:{fontSize:11}},"💓"+r.pulse),
+            ),
+            h("div",{style:css.histMeta},
+              h("div",{style:css.histDate},
+                new Date(r.date).toLocaleDateString("ru",{day:"numeric",month:"short"})+" "+
+                (TIME_OF_DAY.find(t=>t.id===r.timeOfDay)?.icon||"")
+              ),
+              h("div",{style:{fontSize:11,color:"#94a3b8"}},
+                z.label+
+                (r.cigarettes>0?" · 🚬"+r.cigarettes:"")+
+                (r.alcohol>0?" · 🍷"+r.alcohol:"")+
+                (r.meds?" · 💊"+(r.medsName?" "+r.medsName:""):"")+
+                (r.stress>0?" · 😰"+r.stress+"/10":"")
+              ),
+              r.notes&&h("div",{style:css.histNote},r.notes),
+            ),
+            h("button",{onClick:()=>deleteRecord(r.id),style:css.deleteBtn},"✕"),
+          );
+        }),
+      ),
+
+      // ── TAB 3: AI ──
+      tab===3&&h("div",{style:css.card},
+        h("div",{style:css.sTitle},"🤖 AI-анализ"),
+        h("p",{style:css.aiDesc},"ИИ проанализирует давление, сигареты, алкоголь, стресс и лекарства за последние 30 измерений."),
+        h("div",{style:css.aiStats},
+          h("div",{style:css.aiStat},h("span",{style:css.aiStatNum},userRecords.length),h("span",{style:css.aiStatLabel},"измерений")),
+          userRecords.length>0&&(()=>{
+            const n=Math.min(userRecords.length,10);
+            const s=Math.round(userRecords.slice(-n).reduce((a,r)=>a+r.sys,0)/n);
+            const d=Math.round(userRecords.slice(-n).reduce((a,r)=>a+r.dia,0)/n);
+            return h("div",{style:css.aiStat},h("span",{style:{...css.aiStatNum,color:getBpColor(s,d)}},s+"/"+d),h("span",{style:css.aiStatLabel},"среднее (10 изм.)"));
+          })(),
+        ),
+        h("button",{onClick:runAI,disabled:aiLoading,style:css.aiBtn},aiLoading?"⏳ Анализирую...":"Получить анализ"),
+        aiResult&&h("div",{style:css.aiResult},fmtAI(aiResult)),
+        h("div",{style:css.disclaimer},"⚠️ Информационный анализ, не медицинский диагноз."),
+      ),
+
+      // ── TAB 4: Данные ──
+      tab===4&&h("div",null,
+        h("div",{style:css.card},
+          h("div",{style:css.sTitle},"💾 Резервная копия"),
+          h("p",{style:css.aiDesc},"Сохраните данные в файл — они не пропадут даже при очистке браузера или смене телефона."),
+          h("div",{style:css.exportInfo},
+            h("div",{style:css.exportStat},h("span",{style:css.exportNum},data.records.length),h("span",{style:css.exportLabel},"записей")),
+            h("div",{style:css.exportStat},h("span",{style:css.exportNum},data.users.length),h("span",{style:css.exportLabel},"профилей")),
+            h("div",{style:css.exportStat},
+              h("span",{style:css.exportNum},data.records.length>0?new Date(Math.min(...data.records.map(r=>new Date(r.date)))).toLocaleDateString("ru",{day:"numeric",month:"short"}):"—"),
+              h("span",{style:css.exportLabel},"с даты"),
+            ),
+          ),
+          h("div",{style:css.exportBtns},
+            h("button",{onClick:exportJSON,style:css.exportBtn},
+              h("span",{style:{fontSize:22}},"📦"),
+              h("span",{style:{fontWeight:700}},"Скачать JSON"),
+              h("span",{style:{fontSize:11,opacity:0.8}},"Полная копия · для восстановления"),
+            ),
+            h("button",{onClick:exportCSV,style:css.exportBtnGreen},
+              h("span",{style:{fontSize:22}},"📊"),
+              h("span",{style:{fontWeight:700}},"Скачать CSV"),
+              h("span",{style:{fontSize:11,opacity:0.8}},"Таблица · открыть в Excel"),
+            ),
+          ),
+        ),
+        h("div",{style:css.card},
+          h("div",{style:css.sTitle},"📂 Восстановить из файла"),
+          h("p",{style:css.aiDesc},"Загрузите JSON-файл из этого приложения. Текущие данные будут заменены."),
+          h("input",{ref:importRef,type:"file",accept:".json",onChange:importJSON,style:{display:"none"}}),
+          h("button",{onClick:()=>importRef.current?.click(),style:css.importBtn},"📂 Выбрать файл для загрузки"),
+          importMsg&&h("div",{style:{marginTop:10,padding:"10px 14px",borderRadius:10,border:"1.5px solid",fontSize:13,fontWeight:600,
+            color:importMsg.startsWith("✓")?"#166534":"#991b1b",
+            background:importMsg.startsWith("✓")?"#f0fdf4":"#fef2f2",
+            borderColor:importMsg.startsWith("✓")?"#86efac":"#fca5a5"}},importMsg),
+        ),
+        h("div",{style:css.card},
+          h("div",{style:css.sTitle},"💡 Совет"),
+          h("p",{style:{fontSize:13,color:"#64748b",lineHeight:1.6}},"Раз в неделю нажимайте «Скачать JSON» и сохраняйте файл в Google Drive или Telegram — так данные за месяцы лечения останутся в безопасности навсегда."),
+        ),
+      ),
+    ),
+
+      // ── TAB 5: Настройки ──
+      tab===5&&h("div",null,
+        h("div",{style:css.card},
+          h("div",{style:css.sTitle},"⚙️ Настройки"),
+          h("div",{style:css.sTitle2},"API ключ для AI-анализа"),
+          h("p",{style:css.aiDesc},
+            "Получите бесплатный ключ на ",
+            h("a",{href:"https://console.anthropic.com",target:"_blank",style:{color:"#6366f1"}},"console.anthropic.com"),
+            ". Ключ хранится только на вашем телефоне и никуда не отправляется."
+          ),
+          h("div",{style:css.field},
+            h("label",{style:css.label},"Anthropic API Key"),
+            h("input",{
+              style:{...css.input,fontFamily:"monospace",fontSize:12,letterSpacing:"0.5px"},
+              type:"password",
+              placeholder:"sk-ant-...",
+              value:apiKey,
+              onChange:e=>setApiKey(e.target.value),
+            }),
+          ),
+          h("button",{onClick:()=>saveApiKey(apiKey),style:css.saveBtn},apiKeySaved?"✓ Сохранено!":"Сохранить ключ"),
+          apiKey&&h("div",{style:{marginTop:12,padding:"10px 14px",borderRadius:10,background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:13,color:"#166534"}},
+            "✓ Ключ установлен · "+apiKey.slice(0,10)+"••••••••••••"
+          ),
+          !apiKey&&h("div",{style:{marginTop:12,padding:"10px 14px",borderRadius:10,background:"#fef9c3",border:"1.5px solid #fde047",fontSize:13,color:"#854d0e"}},
+            "⚠️ Без ключа AI-анализ не работает. Графики и история доступны всегда."
+          ),
+        ),
+        h("div",{style:css.card},
+          h("div",{style:css.sTitle},"Как получить ключ"),
+          ...[
+            ["1","Зайдите на console.anthropic.com"],
+            ["2","Зарегистрируйтесь (бесплатно)"],
+            ["3","Слева выберите «API Keys»"],
+            ["4","Нажмите «Create Key»"],
+            ["5","Скопируйте ключ (начинается с sk-ant-)"],
+            ["6","Вставьте его выше и нажмите «Сохранить»"],
+          ].map(([n,t])=>h("div",{key:n,style:{display:"flex",gap:12,padding:"8px 0",borderBottom:"1px solid #f1f5f9",alignItems:"center"}},
+            h("div",{style:{width:24,height:24,borderRadius:"50%",background:"#6366f1",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}},n),
+            h("div",{style:{fontSize:13,color:"#475569"}},t),
+          )),
+        ),
+      ),
+
+    // ── User modal ──
+    showUserModal&&h("div",{style:css.overlay},
+      h("div",{style:css.modal},
+        h("div",{style:css.sTitle},"Добавить пользователя"),
+        h("input",{style:css.input,placeholder:"Имя (напр.: Мама)",value:newUserName,
+          onChange:e=>setNewUserName(e.target.value),
+          onKeyDown:e=>e.key==="Enter"&&addUser()}),
+        h("div",{style:css.modalBtns},
+          h("button",{onClick:()=>setShowUserModal(false),style:css.cancelBtn},"Отмена"),
+          h("button",{onClick:addUser,style:css.saveBtn},"Добавить"),
+        ),
+      ),
+    ),
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(App,null));
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
